@@ -91,6 +91,9 @@ use log::{debug, info, trace, warn};
 use rusqlite::NO_PARAMS;
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
+#[cfg(feature = "async-tokio-rusqlite")]
+use tokio_rusqlite::Connection as AsyncConnection;
+
 mod errors;
 
 #[cfg(test)]
@@ -103,6 +106,7 @@ use std::{
     cmp::{self, Ordering},
     fmt::{self, Debug},
     num::NonZeroUsize,
+    sync::Arc,
 };
 
 /// Helper trait to make hook functions clonable.
@@ -650,6 +654,43 @@ impl<'m> Migrations<'m> {
     pub fn validate(&self) -> Result<()> {
         let mut conn = Connection::open_in_memory()?;
         self.to_latest(&mut conn)
+    }
+}
+
+#[cfg(feature = "async-tokio-rusqlite")]
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct AsyncAdapter {
+    migrations: Arc<Migrations<'static>>,
+}
+
+#[cfg(feature = "async-tokio-rusqlite")]
+impl AsyncAdapter {
+    pub fn new(migrations: Migrations<'static>) -> Self {
+        Self {
+            migrations: Arc::new(migrations),
+        }
+    }
+
+    pub async fn current_version(&self, async_conn: &AsyncConnection) -> Result<SchemaVersion> {
+        let m = self.migrations.clone();
+        async_conn.call(move |conn| m.current_version(conn)).await
+    }
+
+    pub async fn to_latest(&self, async_conn: &mut AsyncConnection) -> Result<()> {
+        let m = self.migrations.clone();
+        async_conn.call(move |conn| m.to_latest(conn)).await
+    }
+
+    pub async fn to_version(&self, async_conn: &mut AsyncConnection, version: usize) -> Result<()> {
+        let m = self.migrations.clone();
+        async_conn
+            .call(move |conn| m.to_version(conn, version))
+            .await
+    }
+
+    pub async fn validate(&self) -> Result<()> {
+        let mut async_conn = AsyncConnection::open_in_memory().await?;
+        self.to_latest(&mut async_conn).await
     }
 }
 
